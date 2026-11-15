@@ -11,7 +11,7 @@ from datetime import datetime
 BASE_URL = "https://web.mashov.info/api"
 TARGET_EMAIL = "tomlevy0905@gmail.com"
 DATA_FILE = "saved_data.json"
-DEFAULT_SMTP_PASS = "YOUR_GMAIL_APP_PASSWORD"
+DEFAULT_SMTP_PASS = "bjqm emao watb mauc"
 
 st.set_page_config(page_title="ממוצעי משוב - הכפר הירוק", page_icon="📊", layout="centered")
 
